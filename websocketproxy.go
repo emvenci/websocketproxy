@@ -89,6 +89,12 @@ func (w *WebsocketProxy) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 	// Pass headers from the incoming request to the dialer to forward them to
 	// the final destinations.
 	requestHeader := http.Header{}
+	for name, values := range req.Header {
+		// Loop over all values for the name.
+		for _, value := range values {
+			requestHeader.Add(name, value)
+		}
+	}
 	if origin := req.Header.Get("Origin"); origin != "" {
 		requestHeader.Add("Origin", origin)
 	}
@@ -196,6 +202,7 @@ func (w *WebsocketProxy) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 			}
 		}
 	}
+	
 	replicatePingPong := func(dst, src *websocket.Conn) {
 		src.SetPingHandler(func(appData string) error {
 			return dst.WriteControl(websocket.PingMessage, []byte(appData), time.Time{})
