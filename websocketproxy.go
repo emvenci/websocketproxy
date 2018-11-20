@@ -91,8 +91,10 @@ func (w *WebsocketProxy) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 	requestHeader := http.Header{}
 	for name, values := range req.Header {
 		// Loop over all values for the name.
-		for _, value := range values {
-			requestHeader.Add(name, value)
+		if name != "Sec-Websocket-Key" {
+			for _, value := range values {
+				requestHeader.Add(name, value)
+			}
 		}
 	}
 	if origin := req.Header.Get("Origin"); origin != "" {
