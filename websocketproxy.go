@@ -46,6 +46,10 @@ type WebsocketProxy struct {
 	//  Dialer contains options for connecting to the backend WebSocket server.
 	//  If nil, DefaultDialer is used.
 	Dialer *websocket.Dialer
+
+	ConnPub *websocket.Conn
+
+	ConnBackend *websocket.Conn
 }
 
 // ProxyHandler returns a new http.Handler interface that reverse proxies the
@@ -92,7 +96,7 @@ func (w *WebsocketProxy) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 	for name, values := range req.Header {
 		// Loop over all values for the name.
 		if name != "User-Agent" && name != "Connection" && name != "Sec-Websocket-Key" &&
-		name != "Sec-Websocket-Version" && name != "Upgrade" {
+			name != "Sec-Websocket-Version" && name != "Upgrade" {
 			for _, value := range values {
 				requestHeader.Add(name, value)
 			}
@@ -136,13 +140,15 @@ func (w *WebsocketProxy) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 		w.Director(req, requestHeader)
 	}
 
+	var resp *http.Response
+	var err error
 	// Connect to the backend URL, also pass the headers we get from the requst
 	// together with the Forwarded headers we prepared above.
 	// TODO: support multiplexing on the same backend connection instead of
 	// opening a new TCP connection time for each request. This should be
 	// optional:
 	// http://tools.ietf.org/html/draft-ietf-hybi-websocket-multiplexing-01
-	connBackend, resp, err := dialer.Dial(backendURL.String(), requestHeader)
+	w.ConnBackend, resp, err = dialer.Dial(backendURL.String(), requestHeader)
 	if err != nil {
 		log.Printf("websocketproxy: couldn't dial to remote backend url %s", err)
 		if resp != nil {
@@ -157,7 +163,7 @@ func (w *WebsocketProxy) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 		}
 		return
 	}
-	defer connBackend.Close()
+	defer w.ConnBackend.Close()
 
 	upgrader := w.Upgrader
 	if w.Upgrader == nil {
@@ -175,12 +181,12 @@ func (w *WebsocketProxy) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 
 	// Now upgrade the existing incoming request to a WebSocket connection.
 	// Also pass the header that we gathered from the Dial handshake.
-	connPub, err := upgrader.Upgrade(rw, req, upgradeHeader)
+	w.ConnPub, err = upgrader.Upgrade(rw, req, upgradeHeader)
 	if err != nil {
 		log.Printf("websocketproxy: couldn't upgrade %s", err)
 		return
 	}
-	defer connPub.Close()
+	defer w.ConnPub.Close()
 
 	errClient := make(chan error, 1)
 	errBackend := make(chan error, 1)
@@ -205,7 +211,7 @@ func (w *WebsocketProxy) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 			}
 		}
 	}
-	
+
 	replicatePingPong := func(dst, src *websocket.Conn) {
 		src.SetPingHandler(func(appData string) error {
 			return dst.WriteControl(websocket.PingMessage, []byte(appData), time.Time{})
@@ -214,11 +220,11 @@ func (w *WebsocketProxy) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 			return dst.WriteControl(websocket.PongMessage, []byte(appData), time.Time{})
 		})
 	}
- 	replicatePingPong(connPub, connBackend)
-	replicatePingPong(connBackend, connPub)
-	
-	go replicateWebsocketConn(connPub, connBackend, errClient)
-	go replicateWebsocketConn(connBackend, connPub, errBackend)
+	replicatePingPong(w.ConnPub, w.ConnBackend)
+	replicatePingPong(w.ConnBackend, w.ConnPub)
+
+	go replicateWebsocketConn(w.ConnPub, w.ConnBackend, errClient)
+	go replicateWebsocketConn(w.ConnBackend, w.ConnPub, errBackend)
 
 	var message string
 	select {
